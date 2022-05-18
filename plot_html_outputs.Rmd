@@ -1,0 +1,516 @@
+---
+title: "Atlantis Output Plots GOA"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,warnings=FALSE)
+library(tidyverse)
+library(sf)
+library(rbgm)
+library(tidync)
+library(magrittr)
+library(cowplot)
+library(here)
+library(viridis)
+library(rnaturalearth)
+library(reshape2)
+library(RColorBrewer)
+
+# ggplot theme
+plot_theme <-   theme_minimal()+
+  theme(text=element_text(family="sans",size=10,color="black"),
+        legend.text = element_text(size=10),
+        axis.title=element_text(family="sans",size=14,color="black"),
+        axis.text=element_text(family="sans",size=8,color="black"),
+        panel.grid.major = element_line(color="gray50",linetype=3))
+theme_set(plot_theme)
+
+options(dplyr.summarise.inform = FALSE)
+```
+
+```{r}
+this_no <- '015'
+this_run <- '01'
+```
+
+Output directory to check
+```{r}
+this.dir <- paste0('C:/Users/Alberto Rovellini/Documents/GOA/Parametrization/output_files/data/outputFolder_v', this_no, '_', this_run)
+```
+
+```{r spatial data,include=F,echo=F}
+# file name here of downloaded .bgm file from current Atlantis model
+
+# IF RUNNING AS PART OF MANAGE_ATLANTIS_RUNS, THE source.dir should be inherited here
+# source.dir <- "Atlantis_0100"
+#source.dir <- "AtlantisCalCurrV4_03"
+# here() #should == "/home/atlantis"
+fl <- paste(this.dir,'GOA_WGS84_V4_final.bgm',sep='/')
+# load the file
+bgm <- read_bgm(fl)
+# names(bgm)
+goa_sf <- box_sf(bgm)
+goa_sf <- goa_sf %>% mutate(box_id = box_id+1) #ALBI: adding this for correct matching of boxes
+st_crs(goa_sf) <- st_crs(attr(goa_sf$geometry, "crs")$proj)
+
+# load west cost land for mapping
+coaststates <- ne_countries(continent="North America",returnclass = 'sf') %>% 
+  filter(name %in% c('Canada','United States'))
+```
+
+```{r functional groups table,include=F,echo=F,message=F}
+grps <- read_csv('../data/GOA_Groups.csv')
+
+# set up a functional group types table
+vertebrate_groups <- grps %>% filter(GroupType%in%c("FISH","SHARK","BIRD","MAMMAL")) %>% mutate(BiomassType="vertebrate")
+plankton_groups <- grps %>% filter(GroupType %in% c("PWN",'CEP','LG_ZOO','MED_ZOO','SM_ZOO','LG_PHY','SM_PHY')) %>% 
+  mutate(BiomassType="plankton")
+bottom_groups <- grps %>% filter(GroupType %in% c("MOB_EP_OTHER",'SED_EP_FF','SED_EP_OTHER','PHYTOBEN')) %>% 
+  mutate(BiomassType="2D")
+other_groups <- grps %>% filter(GroupType %in% c("LG_INF","MICROPHTYBENTHOS","SED_BACT","PL_BACT","SM_INF","CARRION","LAB_DET","REF_DET"))%>% 
+  mutate(BiomassType="other")
+biomass_groups <- bind_rows(vertebrate_groups,plankton_groups,bottom_groups,other_groups)
+
+# add to grps df
+grps <- grps %>% left_join(biomass_groups)
+```
+
+```{r load atlantis output,include=F,echo=F}
+# output file
+out_fl <- paste(this.dir, paste0('outputGOA', this_no, '_test.nc'),sep='/')
+out <- tidync(out_fl)
+
+# derived values for output
+# depths <- out %>% hyper_filter(t=t==0) %>% hyper_tibble(select_var="dz") %>% dplyr::select(-t)
+# glimpse(depths)
+
+# volumes of each layer
+volumes <- out %>% hyper_filter(t=t==0) %>% hyper_tibble(select_var="volume") %>% dplyr::select(-t)
+
+# area of each box is the same as volume of the deepest depth layer, because the dz of that layer is 1
+areas <- volumes %>% filter(z==max(z)) %>% dplyr::select(b,volume) %>% rename(area=volume)
+
+# functional group dimensions
+fg_dimensions <- hyper_grids(out) %>% 
+  pluck("grid") %>% 
+  purrr::map_df(function(x){
+    out %>% activate(x) %>% hyper_vars() %>% 
+      mutate(grd=x)
+  })
+```
+
+```{r load atlantis diets}
+# diets table
+diet_check <- read.table(paste(this.dir, paste0('outputGOA', this_no , '_testDietCheck.txt'),sep='/'), as.is = TRUE,header=TRUE,sep=" ") 
+```
+
+
+```{r abun fxn,include=F,echo=F}
+# for abundance
+plot_abun <- function(fg){
+  # get the attributes associated with each functional group
+  
+  fg_atts <- grps %>% filter(Name==fg)
+  
+  #Extract from the output .nc file the appropriate time series variables
+  abun_vars <- hyper_vars(out) %>% # all variables in the .nc file active grid
+    filter(grepl("_Nums",name)) %>% # filter for abundance variables
+    filter(grepl(fg,name)) # filter for specific functional group
+  
+  # Actually pull the data from the .nc
+  abun1 <- out %>% hyper_tibble(select_var=abun_vars$name)
+  
+  # reshape to add together multiple boxes and depths
+  abun2 <- abun1 %>% 
+    pivot_longer(cols = contains(fg_atts$Name),names_to = 'age_group',values_to = 'abundance') %>% 
+    mutate(age=parse_number(age_group)) %>%
+    # REMOVE BOX 0
+    filter(b>1) %>% 
+    group_by(t,age_group,age) %>% # sum numbers at age
+    summarise(abun=sum(abundance)) %>% 
+    ungroup() %>% 
+    mutate(t=t/(60*60*24*365)) # convert time to years
+  
+  # plot
+  plot_out <- abun2 %>%
+    ggplot(aes(t,abun/1e6,col=factor(age)))+
+    geom_line()+
+    labs(col="Age Group",y="Numbers (Millions)",x="Year",title=paste0(fg_atts$LongName,"\nNumbers-at-Age"))
+  
+  return(plot_out)
+}
+```
+
+```{r biomass fxn,include=F,echo=F}
+# for biomass
+plot_biomass <- function(fg){
+  
+  vn <- c(paste0(fg,"_N"),paste0(fg,"_N1"),paste0(fg,"_N2")) # variable name is functional group + "_N" or "_N1" or "_N2"
+  vn <- fg_dimensions$name[which(fg_dimensions$name%in%vn)]
+  grd <- fg_dimensions$grd[which(fg_dimensions$name%in%vn)] %>% unique() # find correct grid using the table above
+  btype <- grps$BiomassType[which(grps$Name==fg)]
+  
+  ## get the data from the netCDF
+  Ndat <- out %>% 
+    activate(grd) %>% # make sure the right grid is active
+    hyper_tibble(select_var=vn) %>% # pull the .nc data into a tibble
+    rename(N=1) # rename the first variable to "N" to be generic
+  
+  ## do checks on what kind of critter we're talking about and adjust accordingly
+  # get the attributes associated with each functional group
+  fg_atts <- grps %>% filter(Name==fg)
+  fgt <- fg_atts$GroupType # get group type
+  
+  # if it's a 3D critter like a fish, or it's plankton-like, biomass is N*volume*(5.7*20/10^9), in metric tons
+  if(btype=="vertebrate"|btype=="plankton") {
+    Ndat %<>%
+      left_join(volumes,by=c('z','b')) %>%  # join the data on volume of each box
+      rename(N=1) %>% #rename the first variable to "n" so the next step can be generic
+      mutate(biomass=N*volume*(5.7*20/10^9)) %>% # calculate biomass for each box and depth in metric tons
+      group_by(t) %>% 
+      summarise(biomass=sum(biomass)) %>% #summarise across boxes and depths
+      ungroup()
+  }
+  
+  # if it's a 2D critter like a benthic invert, biomass is N*area*(5.7*20/10^9), in metric tons
+  if(btype=="2D") {
+    Ndat %<>%
+      left_join(areas,by='b') %>% 
+      mutate(biomass=N*area*(5.7*20/10^9)) %>% # calculate biomass for each box and depth in metric tons
+      group_by(t) %>% 
+      summarise(biomass=sum(biomass)) %>% #summarise across boxes and depths
+      ungroup()
+  }
+    # if it's other (like detritus and bacteria), leave it as a density (biomass/total volume), mg N/m^3
+  if(btype=="other") {
+    sum_volumes <- sum(volumes$volume)
+    Ndat %<>%
+      left_join(volumes,by=c('z','b')) %>%  # join the data on volume of each box
+      rename(N=1) %>% #rename the first variable to "n" so the next step can be generic
+      mutate(biomass=N*volume) %>% # calculate biomass for each box and depth in metric tons
+      group_by(t) %>% 
+      summarise(biomass=sum(biomass)/sum_volumes) %>% #summarise across boxes and depths
+      # biomass for this group is the sum in each time step, divided by the total volume in the domain
+      ungroup()
+  }
+  
+  # make the plot
+  ylabel <- switch(btype, "other" = "mg N/m^3", "vertebrate" = "Metric Tons", "2D" = "Metric Tons","plankton" = "Metric Tons")
+  plot_out <- Ndat %>% 
+    mutate(btype=btype) %>% 
+    mutate(t=t/(60*60*24*365)) %>%  # convert time to years
+    ggplot(aes(t,biomass))+
+    geom_line()+
+    labs(y=ylabel,x="Year",title=paste0(fg_atts$LongName,"\nBiomass"))
+  # print(paste(fg,"done."))
+  return(plot_out)
+  
+}
+```
+
+```{r wage fxn,include=F,echo=F}
+plot_wage_timeseries <- function(fg){
+  
+  # get the attributes associated with each functional group
+  fg_atts <- grps %>% filter(Name==fg)
+  
+  if(fg_atts$BiomassType!="vertebrate") stop("weight at age only for vertebrates.")
+  
+  #Extract from the output .nc file the appropriate reserve N time series variables
+  resN_vars <- hyper_vars(out) %>% # all variables in the .nc file active grid
+    filter(grepl("_ResN",name)) %>% # filter for abundance variables
+    filter(grepl(fg,name)) # filter for specific functional group
+  
+  # Actually pull the data from the .nc
+  resN1 <- out %>% hyper_tibble(select_var=resN_vars$name)
+  
+  # reshape to add together multiple boxes and depths
+  resN2 <- resN1 %>% 
+    pivot_longer(cols = contains(fg_atts$Name),names_to = 'age_group',values_to = 'ResN') %>% 
+    mutate(ResN=na_if(ResN,0)) %>% # replace zeroes with NA
+    mutate(age=parse_number(age_group)) %>%
+    # REMOVE BOX 0
+    filter(b>1) %>% 
+    group_by(t,age_group,age) %>% # get mean reserve N by time and age
+    summarise(resN=mean(ResN,na.rm=T)) %>% 
+    ungroup() %>% 
+    mutate(t=t/(60*60*24*365)) %>%  # convert time to years  
+    mutate(weight=resN*20*5.7*(3.65/2.65)/1000000) %>%  # convert ResN to weight/individual
+    dplyr::select(-age_group)
+  
+  # plot
+  plot_out <- resN2 %>%
+    ggplot(aes(t,weight,col=factor(age)))+
+    geom_line()+
+    labs(col="Age Group",y="Wet Weight per Individual (kg)",x="Year",title=paste0(fg_atts$LongName,"\nWeight-at-Age"))
+  
+  return(plot_out)
+}
+```
+
+```{r spatial fxn, include=F,echo=F}
+plot_spatial <- function(fg,plot_type="spdist"){
+  
+  # Pull biomass using the same process as the plot_biomass function
+  # but we do not average across boxes this time, just across depth
+  vn <- c(paste0(fg,"_N"),paste0(fg,"_N1"),paste0(fg,"_N2")) # variable name is functional group + "_N" or "_N1" or "_N2"
+  vn <- fg_dimensions$name[which(fg_dimensions$name%in%vn)]
+  grd <- fg_dimensions$grd[which(fg_dimensions$name%in%vn)] %>% unique() # find correct grid using the table above
+  btype <- grps$BiomassType[which(grps$Name==fg)]
+  
+  ## get the data from the netCDF
+  Ndat <- out %>% 
+    activate(grd) %>% # make sure the right grid is active
+    hyper_tibble(select_var=vn) %>% # pull the .nc data into a tibble
+    rename(N=1) # rename the first variable to "N" to be generic
+  
+  ## do checks on what kind of critter we're talking about and adjust accordingly
+  # get the attributes associated with each functional group
+  fg_atts <- grps %>% filter(Name==fg)
+  fgt <- fg_atts$GroupType # get group type
+  
+  # if it's a 3D critter like a fish, or it's plankton-like, biomass is N*volume*(5.7*20/10^9), in metric tons
+  if(btype=="vertebrate"|btype=="plankton") {
+    Ndat %<>%
+      left_join(volumes,by=c('z','b')) %>%  # join the data on volume of each box
+      rename(N=1) %>% #rename the first variable to "n" so the next step can be generic
+      mutate(biomass=N*volume*(5.7*20/10^9)) %>% # calculate biomass for each box and depth in metric tons
+      group_by(t,b) %>% 
+      summarise(biomass=sum(biomass)) %>% #summarise across boxes and depths
+      ungroup()
+  }
+  
+  # if it's a 2D critter like a benthic invert, biomass is N*area*(5.7*20/10^9), in metric tons
+  if(btype=="2D") {
+    Ndat %<>%
+      left_join(areas,by='b') %>% 
+      mutate(biomass=N*area*(5.7*20/10^9)) %>% # calculate biomass for each box and depth in metric tons
+      group_by(t,b) %>% 
+      summarise(biomass=sum(biomass)) %>% #summarise across boxes and depths
+      ungroup()
+  }
+    # if it's other (like detritus and bacteria), leave it as a density (biomass/total volume), mg N/m^3
+  if(btype=="other") {
+    sum_volumes <- sum(volumes$volume)
+    Ndat %<>%
+      left_join(volumes,by=c('z','b')) %>%  # join the data on volume of each box
+      rename(N=1) %>% #rename the first variable to "n" so the next step can be generic
+      mutate(biomass=N*volume) %>% # calculate biomass for each box and depth in metric tons
+      group_by(t,b) %>% 
+      summarise(biomass=sum(biomass)/sum_volumes) %>% #summarise across boxes and depths
+      # biomass for this group is the sum in each time step, divided by the total volume in the domain
+      ungroup()
+  }
+  
+    # now we have biomass in each box at each time
+  
+  # make either a plot of mean spatial distribution, or a center-of-gravity timeseries
+  if(!plot_type %in% c("spdist","cog")) stop("plot_type must be 'spdist' or 'cog'.")
+  if(plot_type=="spdist"){
+    # if we want spatial distribution output, calculate
+    # mean proportion of total biomass in each box, across time
+    spdist <- Ndat %>% 
+      group_by(t) %>% 
+      mutate(p=biomass/sum(biomass)*100) %>%  # relative proportion in each box
+      ungroup() %>% 
+      group_by(b) %>% 
+      summarise(meanp=mean(p))
+    
+    # add spatial info and plot
+    spdist_sf <- spdist %>% 
+      left_join(goa_sf,by=c('b'='box_id')) %>% 
+      st_as_sf()
+    
+    # bounding box
+    bbox <- st_bbox(spdist_sf)
+    out_plot <- ggplot()+
+      geom_sf(data=spdist_sf,aes(fill=meanp),col=NA)+
+      scale_fill_viridis()+
+      geom_sf(data=coaststates,fill='gray50')+
+      coord_sf(xlim=c(bbox[1],bbox[3]),ylim=c(bbox[2],bbox[4]))+
+      labs(fill="Percent of Biomass",title=paste0(fg_atts$LongName,"\nDistribution"))
+  }
+  
+  # if we want COG timeseries, do a slightly different calculation
+  if(plot_type=="cog"){
+    # if we want center of gravity
+    # assign biomass in each time to the "inside points" from Atlantis, then calc a weighted mean COG
+    cogts <- Ndat %>% 
+      # join spatial data
+      left_join(goa_sf,by=c('b'='box_id')) %>% 
+      dplyr::select(t,b,biomass,insideX,insideY) %>% 
+      
+      # group by time step and calculate a COG weighted by biomass
+      group_by(t) %>% 
+      summarise(cogX=weighted.mean(insideX,w=biomass),cogY=weighted.mean(insideY,w=biomass)) %>%
+      mutate(t=t/(60*60*24*365)) %>%  # convert time to years
+      filter(t>0)
+      
+    # plot as non-spatial time series
+    # calculate total range in north and east directions to add as an annotation to the plot
+    out_plot <- cogts %>%
+      pivot_longer(contains('cog'),names_to="direction",values_to="meters") %>% 
+      mutate(direction=ifelse(direction=="cogX","eastings","northings")) %>% 
+      ggplot(aes(t,meters/1000))+
+      geom_line()+
+      labs(x="Year",y="Km",title=paste0(fg_atts$LongName,"\nCenter-of-Gravity"))+
+      facet_wrap(~direction,ncol=1,scales="free_y")
+    
+    # add spatial info and plot
+    # cogts_sf <- cogts %>% 
+    #   st_as_sf(coords=c('cogX','cogY'),crs=st_crs(goa_sf),remove=F) %>% 
+    #   filter(t>0) # first time step seems weird in all of this
+    #   
+    # # bounding box
+    # bbox <- st_bbox(cogts_sf)
+    # out_plot <- ggplot()+
+    #   geom_sf(data=cogts_sf,aes(col=t))+
+    #   scale_color_viridis()+
+    #   geom_sf(data=coaststates,fill='gray50',alpha=0.5)+
+    #   coord_sf(xlim=c(bbox[1],bbox[3]),ylim=c(bbox[2],bbox[4]),datum=NA)+
+    #   labs(x="",y="",col="Year",title=paste0(fg_atts$LongName,"\nCenter of Gravity"))
+  }
+  return(out_plot)
+}
+```
+
+```{r diets fxn, include=F,echo=F}
+plot_Diets<-function(dietsAll, FG_to_plot, threshold, years){
+  
+  if(years=="all"){years<-unique(dietsAll$Time)/365}
+  
+  FG_code<-grps$Code[grps$Name==FG_to_plot]
+  
+  #print(FG_code)
+  dietsAll %>%
+    filter(Predator==FG_code) -> subDiet
+  
+  #print(nrow(subDiet))
+  
+  if(!sum(subDiet[,6:ncol(subDiet)])%in%c(0,NA)){
+  
+  selec_prey<-names(which(colSums(subDiet[6:ncol(subDiet)])>threshold)) 
+  
+  colourCount = length(selec_prey)
+  getPalette = colorRampPalette(brewer.pal(9, "Set1"))
+  
+  subDiet %>%
+    melt(id.vars = c("Time", "Predator", "Cohort"), measure.vars=selec_prey) %>%
+    filter(Time%in%as.character(c((years)*365))) %>%
+    ggplot(aes(x=(Time/365),y=value*100,fill=variable, color=variable))+
+    geom_bar(stat="identity")+
+    scale_fill_manual(values=getPalette(colourCount), name = "Prey", labels = grps$LongName[grps$Code%in%selec_prey])+
+    scale_colour_manual(values=getPalette(colourCount),name = "Prey", labels = grps$LongName[grps$Code%in%selec_prey])+
+    facet_wrap(~Cohort)+
+    labs(title= paste("Diet of ",grps$LongName[grps$Name==FG_to_plot]),
+         y="Diet proportions (%)", x = "Years",fill = "Prey",
+         color="Prey")+
+    theme_bw() +
+    theme(legend.position="bottom",
+        legend.spacing.x = unit(0, 'cm')) +
+  guides(fill = guide_legend(label.position = "bottom"))-> dietplot
+  
+      #return(dietplot)
+  }else{
+    dietplot <- ggplot() + annotate(geom="text", x = 4, y = 25, label = "plot could not be produced - check the diet output files") + theme_void() 
+    }
+  return(dietplot)
+    #return("")
+
+}
+```
+
+```{r calc plots}
+# Here we calculate and store the actual plots
+
+# abundance
+verts <- grps %>% filter(GroupType%in%c("FISH","SHARK","BIRD","MAMMAL")) %>% pluck('Name')
+verts_n_at_a <- purrr::map(verts,~plot_abun(.))
+verts_names <- grps %>% filter(GroupType%in%c("FISH","SHARK","BIRD","MAMMAL")) %>% pluck('LongName')
+
+# biomass
+biomass_timeseries_list <- purrr::map(grps$Name,~plot_biomass(.))
+all_grp_names <- grps %>% pluck('LongName')
+
+# weight at age
+verts_wage <- purrr::map(verts,~plot_wage_timeseries(.))
+
+#spatial
+spdist_plots <- purrr::map(grps$Name,~plot_spatial(.))
+cog_plots <- purrr::map(grps$Name,~plot_spatial(.,plot_type="cog"))
+
+#diets
+diets_to_plot<-grps$Name[grps$IsPredator==1]
+diets_names <- grps$LongName[grps$IsPredator==1]
+diet_plots <- purrr::map(diets_to_plot, plot_Diets, dietsAll=diet_check, threshold=0, years="all")
+```
+
+# Abundance Timeseries {.tabset .tabset-pills}
+
+```{r abun,fig.height=4,fig.width=6,results='asis'}
+for(i in 1:length(verts_n_at_a)){
+  cat("  \n##",  verts_names[i],"  \n")
+  print(verts_n_at_a[[i]]) 
+  cat("  \n")
+}
+```
+
+# Biomass Timeseries {.tabset .tabset-pills}
+
+```{r biomass,fig.height=4,fig.width=6,results='asis'}
+for(i in 1:length(all_grp_names)){
+  cat("  \n##",  all_grp_names[i],"  \n")
+  print(biomass_timeseries_list[[i]]) 
+  cat("  \n")
+}
+```
+
+# Weight at Age {.tabset .tabset-pills}
+
+```{r wage,fig.height=4,fig.width=6,results='asis'}
+for(i in 1:length(verts_wage)){
+  cat("  \n##",  verts_names[i],"  \n")
+  print(verts_wage[[i]]) 
+  cat("  \n")
+}
+```
+
+# Spatial Plots
+
+## Mean Spatial Distribution {.tabset .tabset-pills}
+
+```{r spdist,fig.height=4,fig.width=6,results='asis'}
+for(i in 1:length(all_grp_names)){
+  cat("  \n###",  all_grp_names[i],"  \n")
+  print(spdist_plots[[i]]) 
+  cat("  \n")
+}
+```
+
+## Center of Gravity {.tabset .tabset-pills}
+
+```{r cog,fig.height=4,fig.width=6,results='asis'}
+for(i in 1:length(all_grp_names)){
+  cat("  \n###",  all_grp_names[i],"  \n")
+  print(cog_plots[[i]])
+  cat("  \n")
+}
+```
+
+# Diet Timeseries {.tabset .tabset-pills}
+
+```{r diets,fig.height=10,fig.width=12,results='asis'}
+for(i in 1:length(diets_to_plot)){
+  cat("  \n##",  diets_names[i],"  \n")
+  print(diet_plots[[i]])
+  cat("  \n")
+}
+```
+
