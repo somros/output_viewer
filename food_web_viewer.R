@@ -1,11 +1,13 @@
-# Is there a way to build a plot for the food web?
+# View food web
 
 library(tidyverse)
 library(igraph)
 library(RColorBrewer)
 
+select <- dplyr::select
+
 this.path <- 'C:/Users/Alberto Rovellini/Documents/GOA/Parametrization/output_files/data/'
-this.dir <- 'outputFolder_v023_01'
+this.dir <- 'outputFolder_v023_02'
 
 setwd(paste0(this.path, this.dir))
 
@@ -16,7 +18,7 @@ fg <- read.csv('../GOA_Groups.csv', header = T) %>% select(Code,Name)
 fg_key <- read.csv('../fg_to_guild.csv') %>% mutate(fg = str_replace(fg, '_N', ''))
 
 # pick time step in days
-time.step <- 365
+time.step <- 1825
 # pick threshold value of for trophic connections
 thresh <- 0.01 # 1% of consumption for the group minimum
 
@@ -73,7 +75,8 @@ plot(g,
      vertex.label = vertex_weights$Name,
      edge.width = E(g)$dietprop,
      edge.arrow.size = 0.1,
-     layout = layout.sphere, main="sphere"
+     layout = layout.circle, 
+     main="GOA food web"
      )
 
 # 3D interactive version
@@ -96,7 +99,7 @@ links_frame <- edge_weights %>%
   set_names(c('from','to','dietprop'))
 
 # better now
-forceNetwork(Links = links_frame, 
+p <- forceNetwork(Links = links_frame, 
              Nodes = nodes_frame, 
              Source = "from",
              Target = "to", 
@@ -110,5 +113,9 @@ forceNetwork(Links = links_frame,
              charge = -300,
              legend = TRUE,
              zoom = TRUE,
-             arrows = TRUE
+             arrows = TRUE#,
+             #main = paste("Atlantis GOA food web at time", time.step, "days")
              )
+p
+
+saveWidget(p, file = 'networkInteractive2.html')
