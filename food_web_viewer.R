@@ -7,18 +7,18 @@ library(RColorBrewer)
 select <- dplyr::select
 
 this.path <- 'C:/Users/Alberto Rovellini/Documents/GOA/Parametrization/output_files/data/'
-this.dir <- 'outputFolder_v023_02'
+this.dir <- 'outputFolder_v042_01'
 
 setwd(paste0(this.path, this.dir))
 
 # read data
-dietcheck <- read.table('outputGOA023_testDietCheck.txt', header = T)
-biomindex <- read.table('outputGOA023_testBiomIndx.txt', header = T)
+dietcheck <- read.table('outputGOA042_testDietCheck.txt', header = T)
+biomindex <- read.table('outputGOA042_testBiomIndx.txt', header = T)
 fg <- read.csv('../GOA_Groups.csv', header = T) %>% select(Code,Name)
 fg_key <- read.csv('../fg_to_guild.csv') %>% mutate(fg = str_replace(fg, '_N', ''))
 
 # pick time step in days
-time.step <- 1825
+time.step <- 365
 # pick threshold value of for trophic connections
 thresh <- 0.01 # 1% of consumption for the group minimum
 
@@ -73,11 +73,28 @@ plot(g,
      vertex.shape = 'sphere',
      vertex.color = colkey$col,
      vertex.label = vertex_weights$Name,
+     vertex.label.cex=1.5,
      edge.width = E(g)$dietprop,
      edge.arrow.size = 0.1,
-     layout = layout.circle, 
+     layout = layout.sphere, 
      main="GOA food web"
      )
+
+l <- layout_in_circle(g)
+l <- norm_coords(l, ymin=-1, ymax=1, xmin=-1, xmax=1)
+
+plot(g,
+     vertex.size = vertex_weights$Weight,
+     vertex.shape = 'sphere',
+     vertex.color = colkey$col,
+     vertex.label = vertex_weights$Name,
+     vertex.label.cex=1.5,
+     edge.width = E(g)$dietprop,
+     edge.arrow.size = 0.5,
+     layout = l, 
+     main="GOA food web"
+)
+
 
 # 3D interactive version
 library(networkD3)
