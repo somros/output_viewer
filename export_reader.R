@@ -20,6 +20,7 @@ n_cols <- as.numeric(gsub("## COLUMNS ", "", exp_lines[grepl("COLUMNS", exp_line
 
 col_names <- vector(mode = 'list', length = n_cols)
 
+# this can take a few minutes - be patient
 for(i in 1:n_cols){
   
   # find row
@@ -47,3 +48,24 @@ for(i in 1:n_cols){
 
 col_names <- unlist(col_names)
 
+# now read the table itself
+to_skip <- length(exp_lines[grepl('#', exp_lines)])
+
+dat <- read.table(exp_file, skip = to_skip)
+
+# change column names
+colnames(dat) <- col_names
+
+# pick a variable, pull it, and plot it
+this_var <- 'Oxygen'
+
+dat %>%
+  select(time, this_var) %>%
+  mutate(time = time / (60*60*24*365)) %>%
+  filter(time <= 1) %>%
+  set_names(c('time', 'variable')) %>%
+  ggplot()+
+  geom_line(aes(x = time, y = variable))+
+  geom_hline(yintercept = 0, color = 'red')+
+  theme_bw()+
+  labs(title = this_var, x = 'Year')
