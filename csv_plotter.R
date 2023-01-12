@@ -101,23 +101,26 @@ ggsave('biom_rel.png', relbiom, width = 12, height = 18)
 # 
 # # Biomass structure --------------------------------------------------------
 # 
-# guilds <- read.csv('../fg_to_guild.csv')
-# guilds$fg <- gsub('_N', '', guilds$fg)
-# 
-# colourCount <- length(unique(guilds$Guild))
-# getPalette <- colorRampPalette(brewer.pal(12, "Paired"))
-# 
-# dat_long %>%
-#   left_join(guilds, by = c('Name'= 'fg')) %>% # add guilds
-#   group_by(Time, Guild) %>%
-#   summarise(Biomass_tot = sum(Biomass)) %>%
-#   group_by(Time) %>%
-#   mutate(Prop = Biomass_tot/sum(Biomass_tot)) %>%
-#   ggplot()+
-#   geom_bar(aes(x = Time, y = Prop, fill = Guild), stat = 'identity', position = 'stack')+
-#   scale_fill_manual(values=getPalette(colourCount))+
-#   theme_bw()+
-#   labs(x = 'Year', y = 'Biomass proportion')
+guilds <- read.csv('../fg_to_guild.csv')
+guilds$fg <- gsub('_N', '', guilds$fg)
+
+colourCount <- length(unique(guilds$Guild))
+getPalette <- colorRampPalette(brewer.pal(12, "Paired"))
+
+biomstruct <- dat_long %>%
+  left_join(guilds, by = c('Name'= 'fg')) %>% # add guilds
+  group_by(Time, Guild) %>%
+  summarise(Biomass_tot = sum(Biomass)) %>%
+  group_by(Time) %>%
+  mutate(Prop = Biomass_tot/sum(Biomass_tot)) %>%
+  ggplot()+
+  geom_bar(aes(x = Time, y = Prop, fill = Guild), stat = 'identity', position = 'stack')+
+  scale_fill_manual(values=getPalette(colourCount))+
+  theme_bw()+
+  labs(x = 'Year', y = 'Biomass proportion')
+
+ggsave('biomass_structure.png', biomstruct, width = 10, height = 5)
+
 #   
 # # Compare -----------------------------------------------------------------
 # 
@@ -150,3 +153,67 @@ ggsave('biom_rel.png', relbiom, width = 12, height = 18)
 # p
 # 
 # ##ggsave('compare_csv.png',p,width=8,height = 8)
+
+
+# Catch -------------------------------------------------------------------
+
+catch <- read.table(paste0(all_files[grepl('testCatch.txt',all_files)]), header = T)
+
+catch_long <- catch %>%
+  pivot_longer(-Time) %>%
+  filter(name %in% codes,
+         Time > 0)
+catch_t1 <- catch_long %>%
+  filter(Time == 365)
+
+# plot
+catch_plot <- ggplot(catch_long, aes(x = Time, y = value))+
+  geom_line(linewidth = 1.2)+
+  geom_hline(data = catch_t1, aes(yintercept = value), linetype = 'dashed', color = 'red', linewidth = 1.2)+
+  theme_bw()+
+  labs(x ='', y='Catch (t)', main = 'Total catch')+
+  facet_wrap(~name, ncol = 6, scales = 'free')
+catch_plot
+ggsave('catch_total.png', catch_plot, width = 12, height = 10)
+
+
+# relative
+rel_catch_plot <- catch_long %>%
+  group_by(name) %>%
+  mutate(relcatch = value/value[1]) %>%
+  ungroup() %>%
+  ggplot(aes(x = Time, y = relcatch))+
+  geom_line(linewidth = 1.2)+
+  geom_hline(yintercept = 1, linetype = 'dashed', color = 'red', linewidth = 1.2)+
+  theme_bw()+
+  labs(x ='', y='Relative catch')+
+  facet_wrap(~name, ncol = 6, scales = 'free')
+ggsave('rel_catch_total.png', rel_catch_plot, width = 12, height = 10)
+
+# catch by fishery
+cbf <- read.table(paste0(all_files[grepl('testCatchPerFishery.txt',all_files)]), header = T)
+
+cbf_long <- cbf %>%
+  pivot_longer(-c(Time,Fishery)) %>%
+  filter(name %in% codes,
+         Time > 0)
+# check that there is no catch from anything that is not background
+cbf_long %>%
+  filter(Fishery != 'background') %>%
+  pull(value) %>%
+  sum() # 0 - good
+
+# # plot and see that it is the same plot as above
+# # for now not useful as we only have 1 fishery
+# 
+# cbf_plot <- cbf_long %>%
+#   filter(Fishery == 'background') %>%
+#   ggplot(aes(x = Time, y = value))+
+#   geom_line(linewidth = 1.2)+
+#   geom_hline(data = catch_t1, aes(yintercept = value), linetype = 'dashed', color = 'red', linewidth = 1.2)+
+#   theme_bw()+
+#   labs(x ='', y='Catch (t)', main = 'Catch by fishery')+
+#   facet_wrap(~name, ncol = 6, scales = 'free')
+# cbf_plot
+# ggsave('catch_by_fishery.png', cbf_plot, width = 12, height = 10)
+
