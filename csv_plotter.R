@@ -121,6 +121,24 @@ biomstruct <- dat_long %>%
 
 ggsave('biomass_structure.png', biomstruct, width = 10, height = 5)
 
+# get biom structure but exclude detritus and bacteria
+nondet <- setdiff(codes, c("BB",  "PB",  "DC",  "DL",  "DR"))
+
+biomstruct2 <- dat_long %>%
+  filter(Code %in% nondet) %>%
+  left_join(guilds, by = c('Name'= 'fg')) %>% # add guilds
+  group_by(Time, Guild) %>%
+  summarise(Biomass_tot = sum(Biomass)) %>%
+  group_by(Time) %>%
+  mutate(Prop = Biomass_tot/sum(Biomass_tot)) %>%
+  ggplot()+
+  geom_bar(aes(x = Time, y = Prop, fill = Guild), stat = 'identity', position = 'stack')+
+  scale_fill_manual(values=getPalette(colourCount))+
+  theme_bw()+
+  labs(x = 'Year', y = 'Biomass proportion')
+
+ggsave('biomass_structure_no_detritus.png', biomstruct2, width = 10, height = 5)
+
 #   
 # # Compare -----------------------------------------------------------------
 # 
