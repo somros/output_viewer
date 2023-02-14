@@ -1,40 +1,35 @@
-# make new pprey matrix after manipulation in Excel
+# Alberto Rovellini
+# 02/14/2023
+# make new pprey matrix from prm file
+# This code has the purpose of changing values of PPREY for a specific prey across all its predators.
+# Example application 1: group XXX has little top-down control and we want to increase pressure on it across the board
+# Example application 2: group XXX gets eaten too much and we want to reduce pressure on it
+# Example application 3: group XXX has a very flat age structure, symptom that mortality on it is very low, and we do not want to use mL or mQ
+# If your goal is to change a specific value of pPREYnXXXm, you should use Javier's tool in reactive atlantis
+
 library(data.table)
 library(tidyverse)
 
-setwd('~/GOA/Parametrization/output_files/data/pprey_mats/')
-
-template <- readLines('pprey_template.txt')
-template <- template[grep('pPREY',template)]
-
-pprey <- read.csv('../out_213/pprey213.csv')
-
-header.file <- 'pprey_mat_213.txt'
-
-for(i in 1:nrow(pprey)){
-  cat(template[i], file = header.file, append = T)
-  cat('\n', file = header.file, append = T)
-  cat(unlist(pprey[i,]), file = header.file, append = T)
-  cat('\n \n', file = header.file, append = T)
-}
-
-
-# Reduce pressure on a group ----------------------------------------------
+select <- dplyr::select
 
 setwd('~/GOA/Parametrization/output_files/data')
-
-target_group <- 'DOL'
-target_change <- 300
 
 # read in groups
 atlantis_fg <- read.csv('GOA_Groups.csv')
 atlantis_fg <- atlantis_fg %>% pull(Code)
 atlantis_fg <- c(atlantis_fg, 'DCsed', 'DLsed', 'DRsed')
 
-# Can we write code to apply a modifier to the predation pressure on a group?
+# pick run
+this_run <- 863
 
-prm_file <- 'out_354/GOAbioparam_test.prm'
+# define which groups and stages should be changed
+target_groups <- atlantis_fg %>% pull(Code)
+target_prey_stage <- c(1,2)
+target_pred_stage <- c(1,2)
+target_change <- 1
 
+# read in prm file
+prm_file <- paste0('out_', this_run, '/GOAbioparam_test.prm')
 prm <- readLines(prm_file)
 
 # identify rows where the pPREY matrix is
@@ -45,25 +40,64 @@ last_row <- pprey_rows[length(pprey_rows)]+2 # adding the vector of values and t
 # read the pprey matrix
 pprey_matrix <- prm[first_row:last_row]
 
-pprey_names <- pprey_matrix[grep('pPREY', pprey_matrix)]
-pprey_vals <- pprey_matrix[-grep('pPREY', pprey_matrix)]
+pprey_names <- pprey_matrix[grep('pPREY', pprey_matrix)] # get name rows
+pprey_vals <- pprey_matrix[-grep('pPREY', pprey_matrix)] # get value rows
 
-# make a data frame for the values
+# doing some cleaning of the text
+# clean empty rows
+pprey_vals <- pprey_vals[which(nchar(pprey_vals)>0)]
+
+# replace tabs with spaces
+pprey_vals <- gsub('\t', ' ', pprey_vals)
+
+# turn the pprey matrix to a data frame to manipulate
 val_list <- list()
 
 for(i in 1:length(pprey_vals)){
-  val_list[[i]] <- as.data.frame(t(as.numeric(unlist(strsplit(pprey_vals[i],' ')))))
+  
+  # split each string assuming that values are separated by a space
+  this_pprey_vec <- as.data.frame(t(as.numeric(unlist(strsplit(pprey_vals[i],' ')))))
+  
+  # drop NAs at the end of the string (cases where there was a string of blanks)
+  this_pprey_vec <- this_pprey_vec %>% select_if(~ !any(is.na(.)))
+  
+  # write out
+  val_list[[i]] <- this_pprey_vec
 }
 
 val_frame <- rbindlist(val_list) %>%
   set_names(atlantis_fg)
 
+# add column with stage of the prey
+val_frame1 <- val_frame2 <- val_frame %>% mutate(pprey = pprey_names,
+                                  tmp = gsub('pPREY','', gsub('  81.*', '', pprey)),
+                                  prey_stage = as.numeric(substr(tmp,1,1)),
+                                  pred_stage = as.numeric(substr(tmp, nchar(tmp), nchar(tmp))),
+                                  pred = gsub('2','', gsub('1','',tmp))) %>%
+  select(pred, prey_stage, pred_stage, KWT:DRsed)
+
 # apply change
+for(i in 1:length(target_groups)){
+  
+  target_group <- target_groups[i] # this should cycle through each target group once
+  
+  val_frame2 <- val_frame2 %>%
+    rowwise() %>%
+    mutate(!!target_group := if_else(prey_stage %in% target_prey_stage & pred_stage %in% target_pred_stage, 
+                                     .data[[target_group]] * target_change,
+                                     .data[[target_group]])) %>%
+    ungroup()
+  
+}
 
-val_frame <- val_frame %>%
-  mutate(target_group = target_group * target_change)
 
+# write out new pprey matrix
+pprey_file <- paste0('out_', this_run, '/pprey_new.prm')
+file.create(pprey_file)
 
-
-
-
+for(i in 1:length(pprey_names)){
+  
+  cat(pprey_names[i], file=pprey_file, append=TRUE,'\n')
+  cat(unlist(val_frame2[i, -c(1:3)]), file=pprey_file, append=TRUE, '\n')
+  
+}
