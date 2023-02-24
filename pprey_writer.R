@@ -20,13 +20,13 @@ atlantis_fg <- atlantis_fg %>% pull(Code)
 atlantis_fg <- c(atlantis_fg, 'DCsed', 'DLsed', 'DRsed')
 
 # pick run
-this_run <- 863
+this_run <- 950
 
 # define which groups and stages should be changed
-target_groups <- atlantis_fg %>% pull(Code)
-target_prey_stage <- c(1,2)
-target_pred_stage <- c(1,2)
-target_change <- 1
+target_groups <- 'ZM'
+target_prey_stage <- c(0, c(1,2)) # the stage of the prey for which we change values, 0 always present for the invertebrates that have no stage
+target_pred_stage <- c(0, c(1,2)) # the stage of the predator, 0 always present for the invertebrates that have no stage
+target_change <- 1/5
 
 # read in prm file
 prm_file <- paste0('out_', this_run, '/GOAbioparam_test.prm')
@@ -35,10 +35,13 @@ prm <- readLines(prm_file)
 # identify rows where the pPREY matrix is
 pprey_rows <- grep('pPREY',prm)
 first_row <- pprey_rows[2] # discard the first one as it is a message in the GOA prm models
-last_row <- pprey_rows[length(pprey_rows)]+2 # adding the vector of values and the empty row at the end 
+last_row <- pprey_rows[length(pprey_rows)]+2 # adding the vector of values and the empty row at the end
 
 # read the pprey matrix
 pprey_matrix <- prm[first_row:last_row]
+
+# alternatively, read pprey matrix directly
+# pprey_matrix <- readLines( paste0('out_', this_run, '/pprey_new/pprey_newtmp.prm'))
 
 pprey_names <- pprey_matrix[grep('pPREY', pprey_matrix)] # get name rows
 pprey_vals <- pprey_matrix[-grep('pPREY', pprey_matrix)] # get value rows
@@ -76,6 +79,10 @@ val_frame1 <- val_frame2 <- val_frame %>% mutate(pprey = pprey_names,
                                   pred = gsub('2','', gsub('1','',tmp))) %>%
   select(pred, prey_stage, pred_stage, KWT:DRsed)
 
+# change NA stage to 0 for inverts
+val_frame2$prey_stage[is.na(val_frame2$prey_stage)] <- 0
+val_frame2$pred_stage[is.na(val_frame2$pred_stage)] <- 0
+
 # apply change
 for(i in 1:length(target_groups)){
   
@@ -90,14 +97,31 @@ for(i in 1:length(target_groups)){
   
 }
 
+val_frame2 <- val_frame2[,-c(1:3)]
+
+# set to 0.9999 anything > 1, or else Atlantis will not run
+val_frame2[val_frame2 >= 1] <- 0.999
+
 
 # write out new pprey matrix
-pprey_file <- paste0('out_', this_run, '/pprey_new.prm')
+if(!dir.exists(paste0('out_', this_run, '/pprey_new'))){
+  dir.create(paste0('out_', this_run, '/pprey_new'))
+}
+
+pprey_file <- paste0('out_', this_run, '/pprey_new/pprey_new',
+                     '_predstage', paste0(target_pred_stage, collapse = '-'),
+                     '_preystage', paste0(target_prey_stage, collapse = '-'),
+                     '_multiplier',
+                     gsub('\\.','',as.character(target_change)), '.prm')
+
+# pprey_file <- paste0('out_', this_run, '/pprey_new/pprey_new',
+#                      'tmp.prm')
+
 file.create(pprey_file)
 
 for(i in 1:length(pprey_names)){
   
   cat(pprey_names[i], file=pprey_file, append=TRUE,'\n')
-  cat(unlist(val_frame2[i, -c(1:3)]), file=pprey_file, append=TRUE, '\n')
+  cat(unlist(val_frame2[i,]), file=pprey_file, append=TRUE, '\n')
   
 }
